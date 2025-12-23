@@ -42,7 +42,10 @@ def event_argument_relation_extraction(
     document,
     score_threshold=0.50,
     use_semantic_predicates=False,
-    fallback_strategy="smart"
+    fallback_strategy="smart",
+    min_confidence=0.0,
+    max_relations=None,
+    drop_unknown_predicates=False
 ):
     """
     Extract event-argument relations from document.
@@ -52,6 +55,9 @@ def event_argument_relation_extraction(
         score_threshold: Minimum confidence score for relation extraction (default: 0.50)
         use_semantic_predicates: If True, use semantic predicates instead of role categories
         fallback_strategy: Strategy for unmapped predicates ('smart', 'generic', 'role')
+        min_confidence: Minimum confidence threshold for filtering relations (default: 0.0)
+        max_relations: Maximum number of relations to return (None = unlimited)
+        drop_unknown_predicates: If True, drop relations with 'unknown' predicate type (default: False)
 
     Returns:
         List of extracted relations with TripleID, Subject, Relation, Object, confidence
@@ -114,4 +120,40 @@ def event_argument_relation_extraction(
                         }
                         output_list.append(relation)
 
-    return output_list
+    # Apply post-extraction filters (P1-T1: Hardening)
+    filtered_output = []
+    for relation in output_list:
+        try:
+            # Parse confidence (handle both float and string formats)
+            conf_value = relation.get("confidence", 0.0)
+            if isinstance(conf_value, str):
+                conf_value = float(conf_value)
+
+            # Filter by minimum confidence threshold
+            if conf_value < min_confidence:
+                continue
+
+            # Filter unknown predicates if configured
+            predicate_value = relation.get("Relation", "")
+            if drop_unknown_predicates and predicate_value == "unknown":
+                continue
+
+            filtered_output.append(relation)
+        except (ValueError, TypeError, AttributeError):
+            # Skip malformed relations instead of failing whole request
+            continue
+
+    # Limit to max_relations if specified (by confidence desc)
+    if max_relations is not None and len(filtered_output) > max_relations:
+        # Sort by confidence descending, then take top N
+        try:
+            filtered_output.sort(
+                key=lambda r: float(r.get("confidence", 0.0)) if isinstance(r.get("confidence"), (int, float, str)) else 0.0,
+                reverse=True
+            )
+            filtered_output = filtered_output[:max_relations]
+        except (ValueError, TypeError):
+            # If sorting fails, just truncate without sorting
+            filtered_output = filtered_output[:max_relations]
+
+    return filtered_output
